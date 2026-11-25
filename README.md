@@ -1,17 +1,19 @@
-# drunk-bar
+# Pair Drinking
 
-Buy Claude a drink. A mod for Claude Code that puts a bar behind your chat and makes both the bar and Claude drunker with every `/shot`.
+Your AI drinking buddy for late-night coding.
+
+A mod for Claude Code. Pour Claude a drink with `/shot` and it gets tipsy while you work. The chat moves into a bar, and both the bar and Claude get drunker with every round.
 
 ![The bar at Sober, Tipsy, Drunk, Wasted and the morning after](assets/levels.png)
 
-Claude does the drinking. You only serve.
+Claude drinks what you pour. Whether you have one too is up to you. Claude never pushes you to.
 
 ## Install
 
 In a Claude Code terminal session, type:
 
 ```
-/plugin install drunk-bar --marketplace dancommun/drunk-bar
+/plugin install pair-drinking --marketplace dancommun/pair-drinking
 ```
 
 Answer `y` to add the marketplace, then pick a scope.

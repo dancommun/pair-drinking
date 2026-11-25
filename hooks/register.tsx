@@ -33,7 +33,7 @@ export const LEVEL_NAMES = ['Sober', 'Tipsy', 'Drunk', 'Wasted']
 const HANGOVER_FROM = 6
 const LAST_NIGHT = 'last-night'
 
-const tab = atom({ plugin: 'drunk-bar', key: 'tab' } as const, { units: 0, drinks: 0 } as Tab, {
+const tab = atom({ plugin: 'pair-drinking', key: 'tab' } as const, { units: 0, drinks: 0 } as Tab, {
   shape: 'tab-1',
 })
 
@@ -60,7 +60,7 @@ export function parseScene(scene: string): { level: number; glasses: number; isH
 
 // What Claude is told, unseen by the person, after each drink and with each prompt.
 const HOUSE_RULES =
-  'This is a game the person chose by installing the drunk-bar mod and serving you drinks. ' +
+  'This is a game the person chose by installing the pair-drinking mod and serving you drinks. ' +
   'The drunkenness shows in your wording and, from Drunk up, in basic mistakes in harmless chat: trivia, small talk, opinions, brainstorms. ' +
   'Everything with consequences stays sober and correct: ' +
   'code, commands, file edits, tool calls, links, quotes, any work or figure the person will rely on, and anything about health, safety, money or law. ' +
@@ -123,18 +123,18 @@ const HANGOVER_NOTE =
   'You are a little ashamed of last night and remember it only in pieces. You would like a coffee (the person can type /sober), though you know only time really helps.'
 
 export function noteFor(state: Tab): string | undefined {
-  if (state.isHungover === true) return `[drunk-bar] ${HANGOVER_NOTE} ${HOUSE_RULES}`
+  if (state.isHungover === true) return `[pair-drinking] ${HANGOVER_NOTE} ${HOUSE_RULES}`
   const level = levelOf(state.units)
   if (level === 0) return undefined
   const kind = state.kind === undefined ? '' : ` ${KINDS[state.kind]?.note ?? ''}`
-  return `[drunk-bar] ${LEVEL_NOTES[level]}${kind} ${CRAFT} Tab so far: ${state.drinks} drinks, ${state.units} units. ${HOUSE_RULES}`
+  return `[pair-drinking] ${LEVEL_NOTES[level]}${kind} ${CRAFT} Tab so far: ${state.drinks} drinks, ${state.units} units. ${HOUSE_RULES}`
 }
 
 const SOBER_NOTE =
-  '[drunk-bar] You have had coffee and are completely sober again. Write normally from now on: no typos, no slurring, no drunk act.'
+  '[pair-drinking] You have had coffee and are completely sober again. Write normally from now on: no typos, no slurring, no drunk act.'
 
 const WORN_OFF_NOTE =
-  '[drunk-bar] The drinks have worn off and you are sober again. Write normally from now on: no typos, no slurring, no drunk act.'
+  '[pair-drinking] The drinks have worn off and you are sober again. Write normally from now on: no typos, no slurring, no drunk act.'
 
 // One unit wears off with every third message; a hangover lifts after eight.
 const WEARS_OFF_EVERY = 3
