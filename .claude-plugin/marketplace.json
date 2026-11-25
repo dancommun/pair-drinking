@@ -1,11 +1,11 @@
 {
-  "name": "drunk-bar",
+  "name": "pair-drinking",
   "owner": {
     "name": "dancommun"
   },
   "plugins": [
     {
-      "name": "drunk-bar",
+      "name": "pair-drinking",
       "source": "./"
     }
   ]

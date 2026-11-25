@@ -1,6 +1,6 @@
 {
-  "name": "drunk-bar",
+  "name": "pair-drinking",
   "version": "0.1.0",
-  "description": "Buy Claude a drink with /shot and the bar behind the chat gets drunker with it.",
+  "description": "Your AI drinking buddy for late-night coding. Pour Claude a drink with /shot and it gets tipsy while you work.",
   "types": "./types/index.d.ts"
 }
