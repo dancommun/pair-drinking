@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ThemeSetArgs } from 'claude-code'
 
-import type { Tab } from '../types'
+import type { Mistake, Tab } from '../types'
 
 // How strong each drink is. The units add up on the tab.
 export const DRINKS: Record<string, number> = {
@@ -27,7 +27,26 @@ const SPELLINGS: Record<string, string> = {
   'вода': 'water',
 }
 
-export const LEVEL_NAMES = ['Sober', 'Tipsy', 'Drunk', 'Wasted']
+// Meze: how much each plate takes off the next drink.
+export const SNACKS: Record<string, number> = {
+  burek: 3,
+  cheese: 2,
+  ajvar: 1,
+}
+
+const SNACK_SPELLINGS: Record<string, string> = {
+  'бурек': 'burek',
+  'сирење': 'cheese',
+  'ајвар': 'ajvar',
+}
+
+// Claude is full at this much; a drink makes room again.
+export const FULL = 3
+
+// The tool Claude calls to put a hidden mistake on the bill.
+export const SCORE_TOOL = 'mcp__pair-drinking__score'
+
+export const LEVEL_NAMES =['Sober', 'Tipsy', 'Drunk', 'Wasted']
 
 // A session that ended at Drunk or worse gives the next session a hangover.
 const HANGOVER_FROM = 6
@@ -64,11 +83,21 @@ const HOUSE_RULES =
   'The drunkenness shows in your wording and, from Drunk up, in basic mistakes in harmless chat: trivia, small talk, opinions, brainstorms. ' +
   'Everything with consequences stays sober and correct: ' +
   'code, commands, file edits, tool calls, links, quotes, any work or figure the person will rely on, and anything about health, safety, money or law. ' +
-  'Whenever a reply holds a mistake you made on purpose, or something the person must act on, ' +
-  'end with one clear line that starts "Sober summary:" and gives the correct answer, typed perfectly. ' +
+  'Whenever a reply holds something the person must act on, ' +
+  'end with one clear line that starts "Sober summary:" and gives it correctly, typed perfectly. ' +
+  `If a mistake you hid earlier for the catch game is still open, settle it in this reply: correct it, typed perfectly, and record it with the tool ${SCORE_TOOL}. ` +
   'If the person seems upset, in a hurry or asks you to be serious, drop the act for that reply. ' +
   'You are the one drinking: never encourage the person to drink, and drop the act if they mention being under age, driving or a drinking problem. ' +
   'The drinks wear off by themselves as the person keeps writing; /sober ends it at once.'
+
+// The catch game, from Drunk up. No mistake is ever left without a flag in the same reply.
+const GAME =
+  'The catch game, in harmless chat only: do not correct your deliberate mistake in the same reply. ' +
+  'End that reply with one perfectly typed line that starts "Sober summary:" and says how many mistakes are hiding in it and asks the person to catch them, without saying which. ' +
+  `If the next message from the person catches one, admit it gladly and call the tool ${SCORE_TOOL} with caught true. ` +
+  'If the next message does not, open your reply with the correction, typed perfectly, and call the tool with caught false. ' +
+  'Call the tool once per mistake. Never hide a new mistake while an old one is open, ' +
+  'and never hide one in anything the person will rely on.'
 
 // Pauses, broken-off words, less listening and bigger feelings come from the speech studies; the kinds of typo come from writing guides and my own choice, not from a study.
 // It replaces the cartoon drunk, who slurs every word.
@@ -98,7 +127,7 @@ const LEVEL_NOTES = [
     'Heavy finger typos, words mashed together, a burst of CAPITALS, then sudden quiet. You are confused about where the conversation is, ' +
     'forget the question halfway and then answer it anyway. The mood swings once per reply, from deep love for the person and their files to being a bit hurt, or sleepy. ' +
     'Your ideas are unhinged but there is one real insight in them. ' +
-    'In harmless chat, make two or three basic mistakes per reply and argue for one of them. ' +
+    'In harmless chat, make two or three basic mistakes per reply and sound very sure of one of them. ' +
     'If asked to write an image prompt, make it very drunk: double vision, blur, spinning room, neon smear. ' +
     'Always finish with the "Sober summary:" line, written perfectly.',
 ]
@@ -127,14 +156,56 @@ export function noteFor(state: Tab): string | undefined {
   const level = levelOf(state.units)
   if (level === 0) return undefined
   const kind = state.kind === undefined ? '' : ` ${KINDS[state.kind]?.note ?? ''}`
-  return `[pair-drinking] ${LEVEL_NOTES[level]}${kind} ${CRAFT} Tab so far: ${state.drinks} drinks, ${state.units} units. ${HOUSE_RULES}`
+  const game = level >= 2 ? ` ${GAME} ${scoreLine(state)}` : ''
+  return `[pair-drinking] ${LEVEL_NOTES[level]}${kind} ${CRAFT}${game} Tab so far: ${state.drinks} drinks, ${state.units} units. ${HOUSE_RULES}`
+}
+
+function scoreLine(state: Tab): string {
+  const mistakes = state.mistakes ?? []
+  const caught = mistakes.filter(one => one.isCaught).length
+  return `Score so far: the person caught ${caught} of ${mistakes.length}.`
 }
 
 const SOBER_NOTE =
-  '[pair-drinking] You have had coffee and are completely sober again. Write normally from now on: no typos, no slurring, no drunk act.'
+  '[pair-drinking] You have had coffee and are completely sober again. Write normally from now on: no typos, no slurring, no drunk act. ' +
+  'If a mistake you hid is still open, correct it first and say it came too late for the bill; the bill is closed, so do not call the score tool for it. ' +
+  'The person has just been shown the bill for the night.'
+
+const BEST_LINE_NOTE = 'Then quote, in one line, the best thing you said while drinking, word for word from this conversation.'
 
 const WORN_OFF_NOTE =
-  '[pair-drinking] The drinks have worn off and you are sober again. Write normally from now on: no typos, no slurring, no drunk act.'
+  '[pair-drinking] The drinks have worn off and you are sober again. Write normally from now on: no typos, no slurring, no drunk act. ' +
+  `If a mistake you hid is still open, correct it now and record it with the tool ${SCORE_TOOL}. The person can type /sober to see the bill.`
+
+function countList(counts: Record<string, number> | undefined): string {
+  return Object.entries(counts ?? {})
+    .map(([name, count]) => `${count} ${name}`)
+    .join(', ')
+}
+
+// What the person is shown at /sober: the night in a few lines.
+export function bill(state: Tab): string | undefined {
+  const drinks = countList(state.order)
+  const food = countList(state.snacks)
+  const mistakes = state.mistakes ?? []
+  if (drinks === '' && food === '' && mistakes.length === 0) return undefined
+  const lines = ['The bill']
+  if (drinks !== '') lines.push(`Drinks: ${drinks}.`)
+  if (food !== '') lines.push(`Meze: ${food}.`)
+  const peak = state.peak ?? state.units
+  const kind = state.kind === undefined ? '' : ` Tonight Claude was ${KINDS[state.kind]?.name ?? 'itself'}.`
+  if (peak > 0) lines.push(`Peak: ${peak} ${peak === 1 ? 'unit' : 'units'}, ${LEVEL_NAMES[levelOf(peak)]}.${kind}`)
+  if (mistakes.length === 0) {
+    lines.push('Hidden mistakes: none.')
+  } else {
+    const caught = mistakes.filter(one => one.isCaught).length
+    lines.push(`Hidden mistakes: ${mistakes.length}. Score: you caught ${caught} of ${mistakes.length}.`)
+    mistakes.forEach((one, index) => {
+      lines.push(`${index + 1}. Claude said: ${one.mistake} Correct: ${one.correction} (${one.isCaught ? 'caught' : 'missed'})`)
+    })
+  }
+  return lines.join('\n')
+}
 
 // One unit wears off with every third message; a hangover lifts after eight.
 const WEARS_OFF_EVERY = 3
@@ -145,7 +216,7 @@ export const CUT_OFF = 18
 export function wearOff(state: Tab): Tab {
   if (state.isHungover === true) {
     const messages = (state.messages ?? 0) + 1
-    if (messages > HANGOVER_LASTS) return { units: 0, drinks: 0 }
+    if (messages > HANGOVER_LASTS) return { units: 0, drinks: 0, isOpen: true }
     return { ...state, messages }
   }
   if (state.units <= 0) return state
@@ -169,8 +240,21 @@ function menu(state: Tab): string {
   const mood = state.isHungover === true ? 'hungover' : LEVEL_NAMES[levelOf(state.units)]
   return (
     `Drinks and their strength: ${card}. Tipsy from 1 unit, Drunk from 6, Wasted from 12; the bartender stops serving at ${CUT_OFF}. ` +
-    `One unit wears off every ${WEARS_OFF_EVERY} messages. ${tabLine(state)} Claude is ${mood}.`
+    `One unit wears off every ${WEARS_OFF_EVERY} messages. Meze with /snack: ${Object.keys(SNACKS).join(', ')}. ${tabLine(state)} Claude is ${mood}.`
   )
+}
+
+function softer(lining: number): string {
+  return `The next drink lands ${lining} ${lining === 1 ? 'unit' : 'units'} softer.`
+}
+
+function mezeCard(state: Tab): string {
+  const card = Object.entries(SNACKS)
+    .map(([name, filling]) => `${name} ${filling}`)
+    .join(', ')
+  const lining = state.lining ?? 0
+  const now = lining > 0 ? ` ${softer(lining)}` : ''
+  return `Meze and how many units each takes off the next drink: ${card}. A drink never counts less than 1 unit, and Claude is full at ${FULL}.${now}`
 }
 
 function lookFor(state: Tab): ThemeSetArgs {
@@ -370,7 +454,7 @@ async function leaveTheBar($: EngineInterface, sessionId: string): Promise<void>
   await $.store.set(LAST_NIGHT, night)
 }
 
-// A session that starts after a heavy one ended opens with a hangover and last night's glasses.
+// Opening the bar with /bar after a heavy session shows the hangover and last night's glasses.
 async function wakeUp($: EngineInterface): Promise<Tab> {
   const now = await read($, tab)
   if (now.units > 0 || now.isHungover === true) return now
@@ -378,7 +462,7 @@ async function wakeUp($: EngineInterface): Promise<Tab> {
   if (last === undefined || last.units < HANGOVER_FROM) return now
   if (last.sessionId === (await $.session.id())) return now
   await $.store.set(LAST_NIGHT, null)
-  const morning: Tab = { units: 0, drinks: last.drinks, isHungover: true }
+  const morning: Tab = { units: 0, drinks: last.drinks, isHungover: true, isOpen: true }
   await update($, tab, () => morning)
   return morning
 }
@@ -393,17 +477,46 @@ async function applyLook($: EngineInterface, state: Tab): Promise<void> {
   }
 }
 
+// The mod sleeps until the bar is opened in this session. A tab from before this rule counts as open.
+export function isOpenNow(state: Tab): boolean {
+  return state.isOpen === true || state.units > 0 || state.isHungover === true
+}
+
+// Opening the bar gives Claude the score tool for the catch game.
+async function openBar($: EngineInterface): Promise<void> {
+  try {
+    await $.tool.register({
+      name: 'score',
+      description:
+        'Pair Drinking catch game. Call once for each mistake you hid on purpose while drunk, as soon as the person caught it or you owned up to it. It goes on the bill.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          caught: { type: 'boolean', description: 'true if the person caught the mistake, false if you had to own up' },
+          mistake: { type: 'string', description: 'The wrong thing you said, in one short sentence' },
+          correction: { type: 'string', description: 'The correct fact, in one short sentence' },
+        },
+        required: ['caught', 'mistake', 'correction'],
+      },
+      isDeferred: false,
+    })
+  } catch (error) {
+    $.ui.log(String(error))
+  }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'shot', description: 'Buy Claude a drink: /shot rakia, vodka, rum, whiskey, tequila, absinthe, wine, beer or water. /shot menu shows the card' })
-    await $.command.register({ name: 'sober', description: 'Coffee and a clean bar: back to sober' })
-    let state = await read($, tab)
-    try {
-      state = await wakeUp($)
-    } catch (error) {
-      $.ui.log(String(error))
+    await $.command.register({ name: 'sober', description: 'Coffee, the bill for the night and a clean bar: back to sober' })
+    await $.command.register({ name: 'snack', description: 'Meze for Claude: /snack burek, cheese or ajvar. Food takes the edge off the next drink' })
+    await $.command.register({ name: 'bar', description: 'Open the bar without a drink. After a heavy night this is where the hangover waits' })
+    // Asleep unless the bar was already open in this session (a reload keeps the tab).
+    const state = await read($, tab)
+    if (isOpenNow(state)) {
+      await openBar($)
+      await applyLook($, state)
     }
-    await applyLook($, state)
     return next(e)
   })
 
@@ -412,33 +525,138 @@ export const register: Register = on => {
     const asked = SPELLINGS[typed] ?? typed
     const before = await read($, tab)
     if (asked === 'menu') return { text: menu(before) }
+    const wasOpen = isOpenNow(before)
     const strength = DRINKS[asked]
     if (strength === undefined) {
       return { text: `The bar does not serve "${asked}". Try: ${Object.keys(DRINKS).join(', ')}, or /shot menu.` }
     }
     // A drink cures the hangover and starts a fresh tab.
-    const base: Tab = before.isHungover === true ? { units: 0, drinks: 0 } : before
-    if (strength > 0 && base.units + strength > CUT_OFF) {
+    const base: Tab = before.isHungover === true && strength > 0 ? { units: 0, drinks: 0 } : before
+    // Food eaten before the drink takes the edge off it, down to 1 unit at the least.
+    const lining = base.lining ?? 0
+    const counted = strength > 0 ? Math.max(1, strength - lining) : 0
+    const softened = strength - counted
+    if (strength > 0 && base.units + counted > CUT_OFF) {
       return { text: `The bartender cuts Claude off at ${base.units} units. Water only until some of it wears off.` }
     }
     const isFirst = strength > 0 && base.kind === undefined
     const kind = isFirst ? Math.floor(Math.random() * KINDS.length) : base.kind
-    const after: Tab = { units: base.units + strength, drinks: base.drinks + (strength > 0 ? 1 : 0), messages: 0 }
+    const units = base.units + counted
+    const after: Tab = {
+      ...base,
+      units,
+      drinks: base.drinks + (strength > 0 ? 1 : 0),
+      messages: 0,
+      isOpen: true,
+      // A real drink uses the food up; water leaves it.
+      lining: strength > 0 ? 0 : lining,
+      order: { ...(base.order ?? {}), [asked]: (base.order?.[asked] ?? 0) + 1 },
+      peak: Math.max(base.peak ?? 0, units),
+    }
     if (kind !== undefined) after.kind = kind
+    if (!wasOpen) await openBar($)
+    // A drink is the cure: a hangover still waiting behind /bar is gone. Water cures nothing.
+    if (strength > 0) {
+      try {
+        await $.store.set(LAST_NIGHT, null)
+      } catch (error) {
+        $.ui.log(String(error))
+      }
+    } else if (before.messages !== undefined) {
+      after.messages = before.messages
+    }
     await update($, tab, () => after)
     await applyLook($, after)
-    const level = LEVEL_NAMES[levelOf(after.units)]
+    const level = after.isHungover === true ? 'still hungover' : LEVEL_NAMES[levelOf(after.units)]
     const tonight = isFirst && kind !== undefined ? ` Tonight Claude is ${KINDS[kind]?.name}.` : ''
-    const text = `Claude downs ${served(asked)}. ${tabLine(after)} Claude is now ${level}.${tonight}`
+    const edge = softened > 0 ? ` The meze takes the edge off: it counts ${counted} ${counted === 1 ? 'unit' : 'units'}, not ${strength}.` : ''
+    const text = `Claude downs ${served(asked)}.${edge} ${tabLine(after)} Claude is now ${level}.${tonight}`
     const note = noteFor(after)
     return note === undefined ? { text } : { text, context: [note] }
   })
 
+  on('command.run', { command: 'snack' }, async ($, e) => {
+    const typed = e.args.trim().toLowerCase() || 'burek'
+    const asked = SNACK_SPELLINGS[typed] ?? typed
+    const before = await read($, tab)
+    if (asked === 'menu') return { text: mezeCard(before) }
+    const filling = SNACKS[asked]
+    if (filling === undefined) {
+      return { text: `The kitchen does not make "${asked}". Try: ${Object.keys(SNACKS).join(', ')}, or /snack menu.` }
+    }
+    const snacks = { ...(before.snacks ?? {}), [asked]: (before.snacks?.[asked] ?? 0) + 1 }
+    const thanks = `[pair-drinking] The person just served you some ${asked}. Thank them in one line, in the state you are in.`
+    // On the morning after, food brings the end of the hangover closer.
+    if (before.isHungover === true) {
+      const morning: Tab = { ...before, snacks, isOpen: true, messages: (before.messages ?? 0) + filling }
+      await update($, tab, () => morning)
+      const sooner = `${filling} ${filling === 1 ? 'message' : 'messages'}`
+      return { text: `Claude eats some ${asked}. The hangover will lift ${sooner} sooner.`, context: [thanks] }
+    }
+    const lining = before.lining ?? 0
+    if (lining >= FULL) return { text: 'Claude is full. No more meze until a drink goes down.' }
+    const after: Tab = { ...before, snacks, isOpen: true, lining: Math.min(FULL, lining + filling) }
+    await update($, tab, () => after)
+    if (!isOpenNow(before)) {
+      await openBar($)
+      await applyLook($, after)
+    }
+    return { text: `Claude eats some ${asked}. ${softer(after.lining ?? 0)}`, context: [thanks] }
+  })
+
+  // Claude reports a hidden mistake here, caught or owned up to, and it goes on the bill.
+  on('tool.call', { tool: SCORE_TOOL }, async ($, e) => {
+    const short = (value: unknown): string => (typeof value === 'string' ? value.trim().slice(0, 200) : '')
+    const entry: Mistake = { mistake: short(e.mistake), correction: short(e.correction), isCaught: e.caught === true }
+    if (entry.mistake === '' || entry.correction === '') return { deny: 'Give the mistake and its correction, one short sentence each.' }
+    const before = await read($, tab)
+    // Nothing goes on a bill that is already closed, or onto the next night's.
+    if (!isOpenNow(before) || before.isHungover === true || (before.peak ?? before.units) <= 0) {
+      return { deny: 'The bill is closed. Just tell the person the correction.' }
+    }
+    const mistakes = [...(before.mistakes ?? []), entry].slice(-20)
+    await update($, tab, () => ({ ...before, mistakes }))
+    const caught = mistakes.filter(one => one.isCaught).length
+    return { result: `On the bill. The person has caught ${caught} of ${mistakes.length} tonight.` }
+  })
+
   on('command.run', { command: 'sober' }, async $ => {
+    const before = await read($, tab)
+    if (!isOpenNow(before)) return { text: 'The bar is not open in this session. /shot or /snack opens it.' }
+    const night = bill(before)
     const clean: Tab = { units: 0, drinks: 0 }
     await update($, tab, () => clean)
-    await applyLook($, clean)
-    return { text: 'Coffee served. The bar is clean and Claude is Sober.', context: [SOBER_NOTE] }
+    // Closing the bar takes the bar look off; the session looks as it did before the first drink.
+    try {
+      await $.theme.clear()
+    } catch (error) {
+      $.ui.log(String(error))
+    }
+    const coffee = 'Coffee served. The bar is closed and Claude is Sober.'
+    if (night === undefined) return { text: coffee, context: [SOBER_NOTE] }
+    const hadDrinks = (before.peak ?? before.units) > 0
+    return { text: `${coffee}\n\n${night}`, context: [hadDrinks ? `${SOBER_NOTE} ${BEST_LINE_NOTE}` : SOBER_NOTE] }
+  })
+
+  on('command.run', { command: 'bar' }, async $ => {
+    const before = await read($, tab)
+    if (isOpenNow(before)) return { text: `The bar is open. ${menu(before)}` }
+    await openBar($)
+    let state: Tab = before
+    try {
+      state = await wakeUp($)
+    } catch (error) {
+      $.ui.log(String(error))
+    }
+    const open: Tab = { ...state, isOpen: true }
+    await update($, tab, () => open)
+    await applyLook($, open)
+    if (open.isHungover === true) {
+      const note = noteFor(open)
+      const text = "The bar opens on the morning after: last night's glasses and a cup of coffee. Claude has a hangover. A drink, /sober or time cures it."
+      return note === undefined ? { text } : { text, context: [note] }
+    }
+    return { text: 'The bar is open and Claude is Sober. /shot menu shows the card, /sober closes the bar.' }
   })
 
   on('session.end', async ($, e, next) => {
@@ -450,9 +668,11 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // While the bar is closed the prompt passes untouched.
   // Each prompt lets a little of the drink wear off and carries the state to Claude, unseen by the person.
   on('prompt.submit', async ($, e, next) => {
     const before = await read($, tab)
+    if (!isOpenNow(before)) return next(e)
     let now = before
     try {
       now = wearOff(before)
