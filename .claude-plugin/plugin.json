@@ -1,0 +1,6 @@
+{
+  "name": "drunk-bar",
+  "version": "0.1.0",
+  "description": "Buy Claude a drink with /shot and the bar behind the chat gets drunker with it.",
+  "types": "./types/index.d.ts"
+}
