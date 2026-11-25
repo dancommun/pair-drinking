@@ -8,5 +8,6 @@
       "name": "pair-drinking",
       "source": "./"
     }
-  ]
+  ],
+  "description": "Pair Drinking: your AI drinking buddy for late-night coding."
 }

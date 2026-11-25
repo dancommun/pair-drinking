@@ -1,6 +1,9 @@
 {
   "name": "pair-drinking",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your AI drinking buddy for late-night coding. Pour Claude a drink with /shot and it gets tipsy while you work.",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Dancho Dimkov"
+  }
 }
