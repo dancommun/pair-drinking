@@ -1,0 +1,12 @@
+{
+  "name": "drunk-bar",
+  "owner": {
+    "name": "dancommun"
+  },
+  "plugins": [
+    {
+      "name": "drunk-bar",
+      "source": "./"
+    }
+  ]
+}
